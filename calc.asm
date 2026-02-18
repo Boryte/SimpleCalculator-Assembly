@@ -1,4 +1,4 @@
-; calc.asm - "napredniji" integer kalkulator (Windows x64, NASM)
+; calc.asm - simple integer kalkulator (Windows x64, NASM)
 ; - REPL petlja: radi dok ne upišeš q/quit/exit
 ; - Podržava infix:  12 + 5
 ; - Podržava prefix: pow 2 10
@@ -20,10 +20,20 @@ extern strcmp
 extern strtoll
 extern fflush
 
+%macro VCALL 1
+    ; Spremi register argumente u home slotove (Windows x64 varargs)
+    mov [rsp+0x00], rcx
+    mov [rsp+0x08], rdx
+    mov [rsp+0x10], r8
+    mov [rsp+0x18], r9
+    xor eax, eax            ; AL=0 (nema XMM argumenata)
+    call %1
+%endmacro
+
 section .data
     banner      db "ByteCore ASM Kalkulator (int64) - upisi 'help' za upute.", 13, 10, 0
     fmt_prompt  db "[ans=%lld] > ", 0
-    fmt_line    db " %255[^\n]", 0
+    fmt_line    db " %255[^", 13, 10, "]", 0
     fmt_tok     db "%31s %31s %31s", 0
 
     fmt_res     db "Rezultat: %lld", 13, 10, 0
@@ -45,7 +55,7 @@ section .data
                 db  "  pow  gcd  lcm",13,10
                 db  "Komande: help, q, quit, exit",13,10,0
 
-    ; String konstante za komande (za strcmp)
+   
     s_help  db "help",0
     s_q     db "q",0
     s_quit  db "quit",0
@@ -64,33 +74,51 @@ section .bss
 section .text
 global main
 
+; ------------------------------------------------------------
+; parse_operand(token_ptr) -> RAX=value, EDX=success(1/0)
+; RCX = pokazivac na token (npr "123" ili "ans")
+; ------------------------------------------------------------
 parse_operand:
-    sub rsp, 0x28 
+    sub rsp, 0x28                 ; shadow space + poravnanje
 
+    ; Spremi originalni pointer na token na stack (jer C pozivi mogu pregaziti registre)
+    mov [rsp+0x20], rcx           ; koristimo zadnjih 8 bajtova (iza shadow prostora)
+
+    ; strcmp(token, "ans")
+    mov rcx, [rsp+0x20]
     mov rdx, s_ans
     call strcmp
     test eax, eax
     jne .not_ans
+
     mov rax, [ans]
     mov edx, 1
     add rsp, 0x28
     ret
 
 .not_ans:
-
+    ; strtoll(token, &endptr, 10)
+    mov rcx, [rsp+0x20]
     lea rdx, [endptr]
     mov r8d, 10
     call strtoll
+
+    ; Validacija:
+    ; - mora potrositi barem 1 znak (endptr != token)
+    ; - i mora zavrsiti na '\0'
     mov r9, [endptr]
+    cmp r9, [rsp+0x20]
+    je .bad
     cmp byte [r9], 0
     jne .bad
+
     mov edx, 1
     add rsp, 0x28
     ret
 
 .bad:
-    xor eax, eax 
-    xor edx, edx 
+    xor eax, eax
+    xor edx, edx
     add rsp, 0x28
     ret
 
@@ -210,21 +238,20 @@ is_binop:
 
 main:
    
-    sub rsp, 0x28
+    push rbx
+    sub rsp, 0x30
 
     mov qword [ans], 0
 
     
     lea rcx, [banner]
-    xor eax, eax
-    call printf
+    VCALL printf
 
 .repl:
     
     lea rcx, [fmt_prompt]
     mov rdx, [ans]
-    xor eax, eax
-    call printf
+    VCALL printf
 
     
     xor ecx, ecx 
@@ -239,7 +266,7 @@ main:
     lea rcx, [fmt_line]
     lea rdx, [line]
     xor eax, eax
-    call scanf
+    VCALL scanf
     cmp eax, 1
     jne .done
 
@@ -251,7 +278,7 @@ main:
     lea rax, [t3]
     mov [rsp+0x20], rax 
     xor eax, eax
-    call sscanf 
+    VCALL sscanf 
 
     test eax, eax
     jle .repl
@@ -267,8 +294,7 @@ main:
     test eax, eax
     jne .chk_quit1
     lea rcx, [helptext]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .chk_quit1:
@@ -292,8 +318,7 @@ main:
 
     
     lea rcx, [fmt_errsyn]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .not_one:
@@ -310,8 +335,7 @@ main:
     
     lea rcx, [fmt_errnum]
     lea rdx, [t2]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .unary_ok:
@@ -367,16 +391,14 @@ main:
 
 .un_bad:
     lea rcx, [fmt_errop]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .un_store:
     mov [ans], rax
     lea rcx, [fmt_res]
     mov rdx, [ans]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .three_or_more:
@@ -394,8 +416,7 @@ main:
 
     
     lea rcx, [fmt_errsyn]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .prefix:
@@ -406,8 +427,7 @@ main:
     jne .p_a_ok
     lea rcx, [fmt_errnum]
     lea rdx, [t2]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 .p_a_ok:
     mov r10, rax
@@ -418,8 +438,7 @@ main:
     jne .p_b_ok
     lea rcx, [fmt_errnum]
     lea rdx, [t3]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 .p_b_ok:
     mov r11, rax 
@@ -435,8 +454,7 @@ main:
     jne .i_a_ok
     lea rcx, [fmt_errnum]
     lea rdx, [t1]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 .i_a_ok:
     mov r10, rax
@@ -447,8 +465,7 @@ main:
     jne .i_b_ok
     lea rcx, [fmt_errnum]
     lea rdx, [t3]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 .i_b_ok:
     mov r11, rax 
@@ -708,31 +725,28 @@ main:
 
 .op_bad:
     lea rcx, [fmt_errop]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .err_div0:
     lea rcx, [fmt_div0]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .err_powneg:
     lea rcx, [fmt_powneg]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .store_print:
     mov [ans], rax
     lea rcx, [fmt_res]
     mov rdx, [ans]
-    xor eax, eax
-    call printf
+    VCALL printf
     jmp .repl
 
 .done:
-    add rsp, 0x28
+    add rsp, 0x30
+    pop rbx
     xor eax, eax
     ret
